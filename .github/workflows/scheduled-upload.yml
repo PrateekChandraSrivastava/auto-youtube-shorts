@@ -1,5 +1,8 @@
 name: scheduled-upload
 
+permissions:
+  contents: write
+
 on:
   schedule:
     # default: once daily at 09:00 UTC (change later as you like)
@@ -14,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # helps when pushing back changes
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -32,7 +37,6 @@ jobs:
 
       - name: Run scheduled job
         env:
-          # GitHub Secrets you will add later (see Step 3)
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
@@ -41,3 +45,11 @@ jobs:
           NUM_IMAGES: '6'
         run: |
           python main.py
+
+      - name: Persist state (used_sets.json)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/used_sets.json || true
+          git commit -m "chore: update used_sets [skip ci]" || echo "No changes to commit"
+          git push

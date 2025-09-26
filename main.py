@@ -38,6 +38,7 @@ YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  # optional
 
 TMP_DIR = Path("/tmp/auto_youtube")
+STATE_FILE = Path("state/used_sets.json")
 IMAGES_DIR = TMP_DIR / "images"
 OUTPUT_VIDEO = TMP_DIR / "output_short.mp4"
 OUTPUT_VIDEO_WITH_AUDIO = TMP_DIR / "output_short_audio.mp4"
@@ -46,7 +47,8 @@ OUTPUT_VIDEO_WITH_AUDIO = TMP_DIR / "output_short_audio.mp4"
 USED_SETS_FILENAME = "used_sets.json"  # stored in the image folder on Drive
 
 # Scopes
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
 YT_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 # --- Helpers: Drive service init -------------------------------------------------
@@ -117,54 +119,49 @@ def upload_bytes_as_file(drive_service, folder_id, name, data_bytes, mime_type="
 
 # --- Used-set tracking ----------------------------------------------------------
 def compute_signature(file_meta_list):
-    """
-    file_meta_list: list of dicts with at least 'id' (Drive file id)
-    We create a stable signature from sorted ids.
-    """
+    # stable signature from sorted Drive file IDs
     ids = sorted([f["id"] for f in file_meta_list])
     raw = ",".join(ids).encode("utf-8")
+    import hashlib
     return hashlib.sha256(raw).hexdigest()
 
-def load_used_sets(drive_service, folder_id):
-    # try to find USED_SETS_FILENAME in folder; if none, return empty set
-    q = f"'{folder_id}' in parents and name = '{USED_SETS_FILENAME}' and trashed = false"
-    resp = drive_service.files().list(q=q, spaces='drive', fields='files(id,name)').execute()
-    if resp.get("files"):
-        fid = resp["files"][0]["id"]
-        # download
-        tmpf = TMP_DIR / "used_sets.json"
-        download_file_to_path(drive_service, fid, str(tmpf))
-        with open(tmpf, "r", encoding="utf-8") as f:
-            return set(json.load(f))
+def load_used_sets_local():
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
     return set()
 
-def save_used_sets(drive_service, folder_id, used_set):
-    data = json.dumps(list(used_set)).encode("utf-8")
-    upload_bytes_as_file(drive_service, folder_id, USED_SETS_FILENAME, data, mime_type="application/json")
+def save_used_sets_local(used_set):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(used_set), f)
 
 # --- Image selection (avoid repeats) -------------------------------------------
 def pick_images_avoiding_repeats(drive_service, folder_id, n, max_attempts=20):
     files = list_files_in_folder(drive_service, folder_id, mime_contains="image/")
     if not files:
         raise RuntimeError("No images found in Drive folder.")
-    used = load_used_sets(drive_service, folder_id)
+    used = load_used_sets_local()
     attempts = 0
     while attempts < max_attempts:
         chosen = random.sample(files, min(n, len(files)))
         sig = compute_signature(chosen)
         if sig not in used:
-            # accept and store signature immediately
             used.add(sig)
-            save_used_sets(drive_service, folder_id, used)
+            save_used_sets_local(used)
             return chosen
         attempts += 1
-    # if all combos exhausted, fall back to most-recent-deprioritized selection
-    # choose the sample with least-overlap with existing sets (simpler: return random)
+    # fallback if we exhausted combinations
     chosen = random.sample(files, min(n, len(files)))
     sig = compute_signature(chosen)
     used.add(sig)
-    save_used_sets(drive_service, folder_id, used)
+    save_used_sets_local(used)
     return chosen
+
 
 # --- Music selection ------------------------------------------------------------
 def pick_random_music_and_download(drive_service, music_folder_id):
