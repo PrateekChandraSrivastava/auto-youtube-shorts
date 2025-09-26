@@ -13,6 +13,9 @@ import time
 import json
 import subprocess
 import hashlib
+import re
+import unicodedata
+
 from pathlib import Path
 
 # Google API imports
@@ -43,6 +46,8 @@ IMAGES_DIR = TMP_DIR / "images"
 OUTPUT_VIDEO = TMP_DIR / "output_short.mp4"
 OUTPUT_VIDEO_WITH_AUDIO = TMP_DIR / "output_short_audio.mp4"
 
+SAFE_MAX_TITLE = 95  # YouTube allows up to 100; keep a buffer
+ 
 # Drive helper filenames
 USED_SETS_FILENAME = "used_sets.json"  # stored in the image folder on Drive
 
@@ -50,6 +55,7 @@ USED_SETS_FILENAME = "used_sets.json"  # stored in the image folder on Drive
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 YT_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
 
 # --- Helpers: Drive service init -------------------------------------------------
 def ensure_dirs():
@@ -236,6 +242,31 @@ def youtube_upload(video_path, title, description, tags=None, privacy="unlisted"
             print(f"Upload progress: {int(status.progress()*100)}%")
     return response.get("id")
 
+
+
+
+def strip_control_and_unsupported(text: str) -> str:
+    # remove control chars
+    text = "".join(ch for ch in text if unicodedata.category(ch)[0] != "C")
+    # collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+def keep_basic_chars(text: str) -> str:
+    # allow letters, numbers, common punctuation, spaces, dashes, underscores, emoji removal
+    # remove any char that is not in this safe set
+    return re.sub(r"[^A-Za-z0-9 .,;:!?@#&()\-_/|’'\"+]", "", text)
+
+def make_safe_title(raw: str, default="Auto Short"):
+    t = strip_control_and_unsupported(raw)
+    t = keep_basic_chars(t)
+    t = t.strip(" .-_")
+    if not t:
+        t = default
+    if len(t) > SAFE_MAX_TITLE:
+        t = t[:SAFE_MAX_TITLE].rstrip()
+    return t
+
 # --- Title & description generation --------------------------------------------
 def generate_title_and_desc_from_template(image_meta_list):
     # free template method (always available)
@@ -319,10 +350,16 @@ def main():
         final_video = OUTPUT_VIDEO
     # generate title & desc
     title, desc, tags = generate_title_and_desc_openai(chosen_meta)
-    print("Title:", title)
+
+    # sanitize description
+    desc = strip_control_and_unsupported(desc)
+
+    safe_title = make_safe_title(title, default="Auto Short")
+    print("Title (raw):", title)
+    print("Title (safe):", safe_title)
     print("Description:", desc)
-    # upload
-    vid = youtube_upload(final_video, title, desc, tags=tags, privacy="unlisted")
+
+    vid = youtube_upload(final_video, safe_title, desc, tags=tags, privacy="unlisted")
     print("Uploaded. Video ID:", vid)
 
 if __name__ == "__main__":
