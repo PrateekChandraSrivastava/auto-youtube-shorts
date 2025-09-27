@@ -171,13 +171,21 @@ def pick_images_avoiding_repeats(drive_service, folder_id, n, max_attempts=20):
 
 # --- Music selection ------------------------------------------------------------
 def pick_random_music_and_download(drive_service, music_folder_id):
+    # Try audio mime first
     files = list_files_in_folder(drive_service, music_folder_id, mime_contains="audio/")
+    # Fallback: list all and filter by extension
     if not files:
+        all_files = list_files_in_folder(drive_service, music_folder_id, mime_contains=None)
+        files = [f for f in all_files if any(f["name"].lower().endswith(ext) for ext in (".mp3", ".wav", ".m4a"))]
+    if not files:
+        print("No music files found in the Drive music folder.")
         return None
     chosen = random.choice(files)
     dest = TMP_DIR / f"music_{Path(chosen['name']).stem}{Path(chosen['name']).suffix}"
+    print("Selected music:", chosen["name"])
     download_file_to_path(drive_service, chosen["id"], str(dest))
     return str(dest)
+
 
 # --- Video building & mixing ----------------------------------------------------
 def build_video_from_images(image_paths, output_path, per_image_sec=5):
@@ -347,7 +355,9 @@ def main():
             print("No music found; uploading video without audio.")
             final_video = OUTPUT_VIDEO
     else:
+        print("DRIVE_MUSIC_FOLDER_ID not set; uploading video without audio.")
         final_video = OUTPUT_VIDEO
+
     # generate title & desc
     title, desc, tags = generate_title_and_desc_openai(chosen_meta)
 
